@@ -17,7 +17,7 @@
          current_directory/1,
          make_directory/2,
          change_directory/2,
-         list_files/2,
+         list_files/3,
          remove_directory/2,
          remove_file/2,
          put_file/4,
@@ -143,9 +143,9 @@ remove_directory(State, Directory) ->
     end.
 
 % List files in the current or specified directory.
-list_files(State, "") ->
-    list_files(State, current_directory(State));
-list_files(State, Directory) ->
+list_files(State, Options, "") ->
+    list_files(State, Options, current_directory(State));
+list_files(State, _Options, Directory) ->
     Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of

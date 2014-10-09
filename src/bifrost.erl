@@ -130,8 +130,8 @@ establish_control_connection(Socket, InitialState) ->
 control_loop(HookPid, {SocketMod, RawSocket} = Socket, State) ->
     case SocketMod:recv(RawSocket, 0) of
         {ok, Input} ->
-            {Command, Arg} = parse_input(Input),
-            case ftp_command(Socket, State, Command, Arg) of
+            {Command, Options, Arg} = parse_input(Input),
+            case ftp_command(Socket, State, Command, Options, Arg) of
                 {ok, NewState} ->
                     if is_pid(HookPid) ->
                             HookPid ! {new_state, self(), NewState},
@@ -239,19 +239,19 @@ pasv_connection(ControlSocket, State) ->
 
 %% FTP COMMANDS
 
-ftp_command(Socket, State, Command, Arg) ->
+ftp_command(Socket, State, Command, Options, Arg) ->
     Mod = State#connection_state.module,
-    ftp_command(Mod, Socket, State, Command, Arg).
+    ftp_command(Mod, Socket, State, Command, Options, Arg).
 
-ftp_command(Mod, Socket, State, quit, _) ->
+ftp_command(Mod, Socket, State, quit, _, _) ->
     respond(Socket, 200, "Goodbye."),
     Mod:disconnect(State),
     quit;
 
-ftp_command(_, Socket, State, pasv, _) ->
+ftp_command(_, Socket, State, pasv, _, _) ->
     pasv_connection(Socket, State);
 
-ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
+ftp_command(_, {_, RawSocket} = Socket, State, auth, _, Arg) ->
     if State#connection_state.ssl_allowed =:= false ->
             respond(Socket, 500),
             {ok, State};
@@ -275,7 +275,7 @@ ftp_command(_, {_, RawSocket} = Socket, State, auth, Arg) ->
             end
     end;
 
-ftp_command(_, Socket, State, prot, Arg) ->
+ftp_command(_, Socket, State, prot, _, Arg) ->
     ProtMode = case string:to_lower(Arg) of
                    "c" -> clear;
                    _ -> private
@@ -283,15 +283,15 @@ ftp_command(_, Socket, State, prot, Arg) ->
     respond(Socket, 200),
     {ok, State#connection_state{protection_mode=ProtMode}};
 
-ftp_command(_, Socket, State, pbsz, "0") ->
+ftp_command(_, Socket, State, pbsz, _, "0") ->
     respond(Socket, 200),
     {ok, State};
 
-ftp_command(_, Socket, State, user, Arg) ->
+ftp_command(_, Socket, State, user, _, Arg) ->
     respond(Socket, 331),
     {ok, State#connection_state{user_name=Arg}};
 
-ftp_command(_, Socket, State, port, Arg) ->
+ftp_command(_, Socket, State, port, _, Arg) ->
     case parse_address(Arg) of
         {ok, {Addr, Port}} ->
             respond(Socket, 200),
@@ -300,7 +300,7 @@ ftp_command(_, Socket, State, port, Arg) ->
             respond(Socket, 452, "Error parsing address.")
         end;
 
-ftp_command(Mod, Socket, State, pass, Arg) ->
+ftp_command(Mod, Socket, State, pass, _, Arg) ->
     case Mod:login(State, State#connection_state.user_name, Arg) of
         {true, NewState} ->
             respond(Socket, 230),
@@ -312,23 +312,23 @@ ftp_command(Mod, Socket, State, pass, Arg) ->
 
 %% ^^^ from this point down every command requires authentication ^^^
 
-ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, _, _) ->
+ftp_command(_, Socket, State=#connection_state{authenticated_state=unauthenticated}, _, _, _) ->
     respond(Socket, 530),
     {ok, State};
 
-ftp_command(_, Socket, State, rein, _) ->
+ftp_command(_, Socket, State, rein, _, _) ->
     respond(Socket, 200),
     {ok,
      State#connection_state{user_name=none,authenticated_state=unauthenticated}};
 
-ftp_command(Mod, Socket, State, pwd, _) ->
+ftp_command(Mod, Socket, State, pwd, _, _) ->
     respond(Socket, 257, "\"" ++ Mod:current_directory(State) ++ "\""),
     {ok, State};
 
-ftp_command(Mod, Socket, State, cdup, _) ->
+ftp_command(Mod, Socket, State, cdup, _, _) ->
     ftp_command(Mod, Socket, State, cwd, "..");
 
-ftp_command(Mod, Socket, State, cwd, Arg) ->
+ftp_command(Mod, Socket, State, cwd, _, Arg) ->
     case Mod:change_directory(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 250, "directory changed to \"" ++ Mod:current_directory(NewState) ++ "\""),
@@ -338,7 +338,7 @@ ftp_command(Mod, Socket, State, cwd, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, mkd, Arg) ->
+ftp_command(Mod, Socket, State, mkd, _, Arg) ->
     case Mod:make_directory(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 250, "\"" ++ Arg ++ "\" directory created."),
@@ -348,8 +348,8 @@ ftp_command(Mod, Socket, State, mkd, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, nlst, Arg) ->
-    case Mod:list_files(State, Arg) of
+ftp_command(Mod, Socket, State, nlst, Options, Arg) ->
+    case Mod:list_files(State, Options, Arg) of
         {error, NewState} ->
             respond(Socket, 451),
             {ok, NewState};
@@ -361,8 +361,8 @@ ftp_command(Mod, Socket, State, nlst, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, list, Arg) ->
-    case Mod:list_files(State, Arg) of
+ftp_command(Mod, Socket, State, list, Options, Arg) ->
+    case Mod:list_files(State, Options, Arg) of
         {error, _} ->
             respond(Socket, 451),
             {ok, State};
@@ -374,7 +374,7 @@ ftp_command(Mod, Socket, State, list, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, rmd, Arg) ->
+ftp_command(Mod, Socket, State, rmd, _, Arg) ->
     case Mod:remove_directory(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 200),
@@ -384,11 +384,11 @@ ftp_command(Mod, Socket, State, rmd, Arg) ->
             {ok, State}
         end;
 
-ftp_command(_, Socket, State, syst, _) ->
+ftp_command(_, Socket, State, syst, _, _) ->
     respond(Socket, 215, "UNIX Type: L8"),
     {ok, State};
 
-ftp_command(Mod, Socket, State, dele, Arg) ->
+ftp_command(Mod, Socket, State, dele, _, Arg) ->
     case Mod:remove_file(State, Arg) of
         {ok, NewState} ->
             respond(Socket, 200),
@@ -398,7 +398,7 @@ ftp_command(Mod, Socket, State, dele, Arg) ->
             {ok, State}
         end;
 
-ftp_command(Mod, Socket, State, stor, Arg) ->
+ftp_command(Mod, Socket, State, stor, _, Arg) ->
     DataSocket = data_connection(Socket, State),
     Fun = fun() ->
                   case bf_recv(DataSocket) of
@@ -419,7 +419,7 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
     bf_close(DataSocket),
     {ok, RetState};
 
-ftp_command(_, Socket, State, type, Arg) ->
+ftp_command(_, Socket, State, type, _, Arg) ->
     case Arg of
         "I" ->
             respond(Socket, 200);
@@ -430,7 +430,7 @@ ftp_command(_, Socket, State, type, Arg) ->
     end,
     {ok, State};
 
-ftp_command(Mod, Socket, State, site, Arg) ->
+ftp_command(Mod, Socket, State, site, _, Arg) ->
     [Command | Sargs] = string:tokens(Arg, " "),
     case Mod:site_command(State, list_to_atom(string:to_lower(Command)), string:join(Sargs, " ")) of
         {ok, NewState} ->
@@ -444,7 +444,7 @@ ftp_command(Mod, Socket, State, site, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, site_help, _) ->
+ftp_command(Mod, Socket, State, site_help, _, _) ->
     case Mod:site_help(State) of
         {ok, []} ->
             respond(Socket, 500);
@@ -460,7 +460,7 @@ ftp_command(Mod, Socket, State, site_help, _) ->
     end,
     {ok, State};
 
-ftp_command(Mod, Socket, State, help, Arg) ->
+ftp_command(Mod, Socket, State, help, _, Arg) ->
     LowerArg =  string:to_lower(Arg),
     case LowerArg of
         "site" ->
@@ -470,7 +470,7 @@ ftp_command(Mod, Socket, State, help, Arg) ->
             {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, retr, Arg) ->
+ftp_command(Mod, Socket, State, retr, _, Arg) ->
     try
         case Mod:get_file(State, Arg) of
               {ok, Fun} ->
@@ -489,7 +489,7 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
               {ok, State}
     end;
 
-ftp_command(Mod, Socket, State, mdtm, Arg) ->
+ftp_command(Mod, Socket, State, mdtm, _, Arg) ->
     case Mod:file_info(State, Arg) of
         {ok, FileInfo} ->
             respond(Socket,
@@ -500,11 +500,11 @@ ftp_command(Mod, Socket, State, mdtm, Arg) ->
     end,
     {ok, State};
 
-ftp_command(_, Socket, State, rnfr, Arg) ->
+ftp_command(_, Socket, State, rnfr, _, Arg) ->
     respond(Socket, 350, "Ready for RNTO."),
     {ok, State#connection_state{rnfr=Arg}};
 
-ftp_command(Mod, Socket, State, rnto, Arg) ->
+ftp_command(Mod, Socket, State, rnto, _, Arg) ->
     case State#connection_state.rnfr of
         undefined ->
             respond(Socket, 503, "RNFR not specified."),
@@ -520,22 +520,22 @@ ftp_command(Mod, Socket, State, rnto, Arg) ->
             end
     end;
 
-ftp_command(Mod, Socket, State, xcwd, Arg) ->
-    ftp_command(Mod, Socket, State, cwd, Arg);
+ftp_command(Mod, Socket, State, xcwd, Options, Arg) ->
+    ftp_command(Mod, Socket, State, cwd, Options, Arg);
 
-ftp_command(Mod, Socket, State, xcup, Arg) ->
-    ftp_command(Mod, Socket, State, cdup, Arg);
+ftp_command(Mod, Socket, State, xcup, Options, Arg) ->
+    ftp_command(Mod, Socket, State, cdup, Options, Arg);
 
-ftp_command(Mod, Socket, State, xmkd, Arg) ->
-    ftp_command(Mod, Socket, State, mkd, Arg);
+ftp_command(Mod, Socket, State, xmkd, Options, Arg) ->
+    ftp_command(Mod, Socket, State, mkd, Options, Arg);
 
-ftp_command(Mod, Socket, State, xpwd, Arg) ->
-    ftp_command(Mod, Socket, State, pwd, Arg);
+ftp_command(Mod, Socket, State, xpwd, Options, Arg) ->
+    ftp_command(Mod, Socket, State, pwd, Options, Arg);
 
-ftp_command(Mod, Socket, State, xrmd, Arg) ->
-    ftp_command(Mod, Socket, State, rmd, Arg);
+ftp_command(Mod, Socket, State, xrmd, Options, Arg) ->
+    ftp_command(Mod, Socket, State, rmd, Options, Arg);
 
-ftp_command(Mod, Socket, State, feat, Arg) ->
+ftp_command(Mod, Socket, State, feat, _, Arg) ->
     respond_raw(Socket, "211-Features"),
     case State#connection_state.utf8 of
         true ->
@@ -546,7 +546,7 @@ ftp_command(Mod, Socket, State, feat, Arg) ->
     respond(Socket, 211, "End"),
     {ok, State};
 
-ftp_command(Mod, Socket, State, opts, Arg) ->
+ftp_command(Mod, Socket, State, opts, _, Arg) ->
     case string:to_upper(Arg) of
         "UTF8 ON" when State#connection_state.utf8 =:= true ->
             respond(Socket, 200, "Accepted");
@@ -555,11 +555,11 @@ ftp_command(Mod, Socket, State, opts, Arg) ->
     end,
     {ok, State};
 
-ftp_command(Mod, Socket, State, size, Arg) ->
+ftp_command(Mod, Socket, State, size, _, Arg) ->
     respond(Socket, 550),
     {ok, State};
 
-ftp_command(_, Socket, State, Command, _Arg) ->
+ftp_command(_, Socket, State, Command, _, _Arg) ->
     error_logger:warning_report({bifrost, unrecognized_command, Command}),
     respond(Socket, 500),
     {ok, State}.
@@ -580,10 +580,17 @@ strip_newlines(S) ->
                 "\r\n").
 
 parse_input(Input) ->
-    Tokens = string:tokens(Input, " "),
-    [Command | Args] = lists:map(fun(S) -> strip_newlines(S) end,
-                                 Tokens),
-    {list_to_atom(string:to_lower(Command)), string:join(Args, " ")}.
+    [Command | Other] = string:tokens(Input, " "),
+    %% [Command | Args] = lists:map(fun(S) -> strip_newlines(S) end,
+    %%                              Tokens),
+    Fun = fun
+              ([$-|Option], {OptsAcc, ArgsAcc}) ->
+                  {[strip_newlines(Option)|OptsAcc], ArgsAcc};
+              (Item, {OptsAcc, ArgsAcc}) ->
+                  {OptsAcc, [strip_newlines(Item)|ArgsAcc]}
+          end,
+    {Options, Args} = lists:foldl(Fun, {[], []}, Other),
+    {list_to_atom(string:to_lower(strip_newlines(Command))), Options, string:join(Args, " ")}.
 
 list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
