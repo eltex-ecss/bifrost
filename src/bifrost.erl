@@ -10,7 +10,7 @@
 -include("bifrost.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
--export([start_link/2, establish_control_connection/2, await_connections/2, supervise_connections/1]).
+-export([start_link/2, establish_control_connection/2, await_connections/2, supervise_connections/2]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
@@ -44,9 +44,10 @@ init([HookModule, Opts]) ->
                                              ssl_cert=SslCert,
                                              ssl_ca_cert=CaSslCert,
                                              utf8=UTF8},
+            Self = self(),
             Supervisor = proc_lib:spawn_link(?MODULE,
                                              supervise_connections,
-                                             [HookModule:init(InitialState, Opts)]),
+                                             [Self, HookModule:init(InitialState, Opts)]),
             proc_lib:spawn_link(?MODULE,
                                 await_connections,
                                 [Listen, Supervisor]),
@@ -96,24 +97,32 @@ await_connections(Listen, Supervisor) ->
     end,
     await_connections(Listen, Supervisor).
 
-supervise_connections(InitialState) ->
+supervise_connections(ParentPid, InitialState) ->
     process_flag(trap_exit, true),
+    erlang:monitor(process, ParentPid),
+    connections_monitor(InitialState).
+
+connections_monitor(InitialState) ->
     receive
         {new_connection, Acceptor, Socket} ->
             Worker = proc_lib:spawn_link(?MODULE,
                                 establish_control_connection,
                                 [Socket, InitialState]),
-            Acceptor ! {ack, Worker};
+            Acceptor ! {ack, Worker},
+            connections_monitor(InitialState);
         {'EXIT', _Pid, normal} -> % not a crash
-            ok;
+            connections_monitor(InitialState);
         {'EXIT', _Pid, shutdown} -> % manual termination, not a crash
-            ok;
+            connections_monitor(InitialState);
         {'EXIT', Pid, Info} ->
-            error_logger:error_msg("Control connection ~p crashed: ~p~n", [Pid, Info]);
+            error_logger:error_msg("Control connection ~p crashed: ~p~n", [Pid, Info]),
+            connections_monitor(InitialState);
+        {'DOWN', MonitorRef, process, _Object, _Info} ->
+            erlang:demonitor(MonitorRef, [flush]),
+            ok;
         _ ->
-            ok
-    end,
-    supervise_connections(InitialState).
+            connections_monitor(InitialState)
+    end.
 
 establish_control_connection(Socket, InitialState) ->
     respond({gen_tcp, Socket}, 220, "FTP Server Ready"),
@@ -535,7 +544,7 @@ ftp_command(Mod, Socket, State, xpwd, Options, Arg) ->
 ftp_command(Mod, Socket, State, xrmd, Options, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Options, Arg);
 
-ftp_command(Mod, Socket, State, feat, _, Arg) ->
+ftp_command(_Mod, Socket, State, feat, _, _Arg) ->
     respond_raw(Socket, "211-Features"),
     case State#connection_state.utf8 of
         true ->
@@ -546,7 +555,7 @@ ftp_command(Mod, Socket, State, feat, _, Arg) ->
     respond(Socket, 211, "End"),
     {ok, State};
 
-ftp_command(Mod, Socket, State, opts, _, Arg) ->
+ftp_command(_Mod, Socket, State, opts, _, Arg) ->
     case string:to_upper(Arg) of
         "UTF8 ON" when State#connection_state.utf8 =:= true ->
             respond(Socket, 200, "Accepted");
@@ -555,7 +564,7 @@ ftp_command(Mod, Socket, State, opts, _, Arg) ->
     end,
     {ok, State};
 
-ftp_command(Mod, Socket, State, size, _, Arg) ->
+ftp_command(_Mod, Socket, State, size, _, _Arg) ->
     respond(Socket, 550),
     {ok, State};
 
@@ -861,9 +870,9 @@ strip_newlines_test() ->
     "testing again" = strip_newlines("testing again").
 
 parse_input_test() ->
-    {test, "1 2 3"} = parse_input("TEST 1 2 3"),
-    {test, ""} = parse_input("Test\r\n"),
-    {test, "awesome"} = parse_input("Test awesome\r\n").
+    {test, [], "3 2 1"} = parse_input("TEST 1 2 3"),
+    {test, [], ""} = parse_input("Test\r\n"),
+    {test, [], "awesome"} = parse_input("Test awesome\r\n").
 
 format_access_test() ->
     "rwxrwxrwx" = format_access(8#0777),
