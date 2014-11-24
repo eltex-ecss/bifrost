@@ -15,6 +15,8 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3]).
 
+-define(FEATURES, [ "UTF8" ]).
+
 default(Expr, Default) ->
     case Expr of
         undefined ->
@@ -23,10 +25,14 @@ default(Expr, Default) ->
             Expr
     end.
 
+-spec ucs2_to_utf8(string()) -> string().
+ucs2_to_utf8(String) ->
+    erlang:binary_to_list(unicode:characters_to_binary(String, utf8)).
+
 start_link(HookModule, Opts) ->
     gen_server:start_link(?MODULE, [HookModule, Opts], []).
 
-% gen_server callbacks implementation
+%% gen_server callbacks implementation
 init([HookModule, Opts]) ->
     Port = default(proplists:get_value(port, Opts), 21),
     Ssl = default(proplists:get_value(ssl, Opts), false),
@@ -173,11 +179,11 @@ respond(Socket, ResponseCode) ->
     respond(Socket, ResponseCode, response_code_string(ResponseCode)).
 
 respond({SocketMod, Socket}, ResponseCode, Message) ->
-    Line = integer_to_list(ResponseCode) ++ " " ++ Message ++ "\r\n",
+    Line = integer_to_list(ResponseCode) ++ " " ++ ucs2_to_utf8(Message) ++ "\r\n",
     SocketMod:send(Socket, Line).
 
 respond_raw({SocketMod, Socket}, Line) ->
-    SocketMod:send(Socket, Line ++ "\r\n").
+    SocketMod:send(Socket, ucs2_to_utf8(Line) ++ "\r\n").
 
 ssl_options(State) ->
     [{keyfile, State#connection_state.ssl_key},
@@ -207,19 +213,19 @@ data_connection(ControlSocket, State) ->
     end.
 
 
-% passive -- accepts an inbound connection
+%% passive -- accepts an inbound connection
 establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
     gen_tcp:accept(Listen);
 
-% active -- establishes an outbound connection
+%% active -- establishes an outbound connection
 establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
     gen_tcp:connect(Addr, Port, [{active, false}, binary]).
 
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
         {passive, PasvListen, _} ->
-            % We should only have one passive socket open at a time, so close the current one
-            % and open a new one.
+                                                % We should only have one passive socket open at a time, so close the current one
+                                                % and open a new one.
             gen_tcp:close(PasvListen),
             pasv_connection(ControlSocket, State#connection_state{pasv_listen=undefined});
         undefined ->
@@ -248,9 +254,20 @@ pasv_connection(ControlSocket, State) ->
 
 %% FTP COMMANDS
 
-ftp_command(Socket, State, Command, Options, Arg) ->
+ftp_command(Socket, State, Command, Options, RawArg) ->
     Mod = State#connection_state.module,
-    ftp_command(Mod, Socket, State, Command, Options, Arg).
+    case unicode:characters_to_list(erlang:list_to_binary(RawArg), utf8) of
+        { error, List, _RestData } ->
+            error_logger:warning_report({bifrost, invalid_utf8, List}),
+            respond(Socket, 501),
+            {ok, State};
+        { incomplete, List, _Binary } ->
+            error_logger:warning_report({bifrost, incomplete_utf8, List}),
+            respond(Socket, 501),
+            {ok, State};
+        Arg ->
+            ftp_command(Mod, Socket, State, Command, Options, Arg)
+    end.
 
 ftp_command(Mod, Socket, State, quit, _, _) ->
     respond(Socket, 200, "Goodbye."),
@@ -305,9 +322,9 @@ ftp_command(_, Socket, State, port, _, Arg) ->
         {ok, {Addr, Port}} ->
             respond(Socket, 200),
             {ok, State#connection_state{data_port = {active, Addr, Port}}};
-         _ ->
+        _ ->
             respond(Socket, 452, "Error parsing address.")
-        end;
+    end;
 
 ftp_command(Mod, Socket, State, pass, _, Arg) ->
     case Mod:login(State, State#connection_state.user_name, Arg) of
@@ -317,7 +334,17 @@ ftp_command(Mod, Socket, State, pass, _, Arg) ->
         _ ->
             respond(Socket, 530, "Login incorrect."),
             quit
-     end;
+    end;
+
+%% based of rfc2389
+ftp_command(_Mod, Socket, State, feat, _, _Arg) ->
+    respond_raw(Socket, "211- Extensions supported:"),
+    lists:map(	fun	({Feature, FeatureParams}) -> respond_raw(Socket, " " ++ Feature ++ " " ++ FeatureParams);
+                      (Feature) -> respond_raw(Socket, " " ++ Feature)
+                end,
+                ?FEATURES),
+    respond(Socket, 211, "End"),
+    {ok, State};
 
 %% ^^^ from this point down every command requires authentication ^^^
 
@@ -391,7 +418,7 @@ ftp_command(Mod, Socket, State, rmd, _, Arg) ->
         {error, _} ->
             respond(Socket, 550),
             {ok, State}
-        end;
+    end;
 
 ftp_command(_, Socket, State, syst, _, _) ->
     respond(Socket, 215, "UNIX Type: L8"),
@@ -405,7 +432,7 @@ ftp_command(Mod, Socket, State, dele, _, Arg) ->
         {error, _} ->
             respond(Socket, 450),
             {ok, State}
-        end;
+    end;
 
 ftp_command(Mod, Socket, State, stor, _, Arg) ->
     DataSocket = data_connection(Socket, State),
@@ -482,21 +509,21 @@ ftp_command(Mod, Socket, State, help, _, Arg) ->
 ftp_command(Mod, Socket, State, retr, _, Arg) ->
     try
         case Mod:get_file(State, Arg) of
-              {ok, Fun} ->
-                  DataSocket = data_connection(Socket, State),
-                  {ok, NewState} = write_fun(DataSocket, Fun),
-                  respond(Socket, 226),
-                  bf_close(DataSocket),
-                  {ok, NewState};
-              error ->
-                  respond(Socket, 550),
-                  {ok, State}
+            {ok, Fun} ->
+                DataSocket = data_connection(Socket, State),
+                {ok, NewState} = write_fun(DataSocket, Fun),
+                respond(Socket, 226),
+                bf_close(DataSocket),
+                {ok, NewState};
+            error ->
+                respond(Socket, 550),
+                {ok, State}
         end
-    catch
-        _ ->
-              respond(Socket, 550),
-              {ok, State}
-    end;
+        catch
+            _ ->
+                                                   respond(Socket, 550),
+                                                   {ok, State}
+                                           end;
 
 ftp_command(Mod, Socket, State, mdtm, _, Arg) ->
     case Mod:file_info(State, Arg) of
@@ -584,7 +611,7 @@ write_fun(Socket, Fun) ->
 
 strip_newlines(S) ->
     lists:foldr(fun(C, A) ->
-                       string:strip(A, right, C) end,
+                        string:strip(A, right, C) end,
                 S,
                 "\r\n").
 
@@ -604,14 +631,13 @@ parse_input(Input) ->
 list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
                       bf_send(DataSocket,
-                              file_info_to_string(Info) ++ "\r\n") end,
+                              ucs2_to_utf8(file_info_to_string(Info)) ++ "\r\n") end,
               Files),
     ok.
 
 list_file_names_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
-                      bf_send(DataSocket,
-                              Info#file_info.name ++ "\r\n") end,
+                      bf_send(DataSocket, ucs2_to_utf8(Info#file_info.name)++"\r\n") end,
               Files),
     ok.
 
@@ -624,7 +650,7 @@ bf_close({SockMod, Socket}) ->
 bf_recv({SockMod, Socket}) ->
     SockMod:recv(Socket, 0).
 
-% Adapted from jungerl/ftpd.erl
+%% Adapted from jungerl/ftpd.erl
 response_code_string(110) -> "MARK yyyy = mmmm";
 response_code_string(120) -> "Service ready in nnn minutes.";
 response_code_string(125) -> "Data connection alredy open; transfere starting.";
@@ -666,7 +692,7 @@ response_code_string(552) -> "Requested file action aborted.";
 response_code_string(553) -> "Requested action not taken.";
 response_code_string(_) -> "N/A".
 
-% Taken from jungerl/ftpd
+%% Taken from jungerl/ftpd
 
 file_info_to_string(Info) ->
     format_type(Info#file_info.type) ++
@@ -743,10 +769,10 @@ month(10) -> "Oct";
 month(11) -> "Nov";
 month(12) -> "Dec".
 
-% parse address on form:
-% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
-% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
-% Taken from jungerl/ftpd
+%% parse address on form:
+%% d1,d2,d3,d4,p1,p2  => { {d1,d2,d3,d4}, port} -- ipv4
+%% h1,h2,...,h32,p1,p2 => {{n1,n2,..,n8}, port} -- ipv6
+%% Taken from jungerl/ftpd
 parse_address(Str) ->
     paddr(Str, 0, []).
 
@@ -776,12 +802,12 @@ format_port(PortNumber) ->
 
 %% EUNIT TESTS %%
 
-% Testing Utility Functions %
+%% Testing Utility Functions
 
 setup() ->
     meck:new(gen_tcp, [unstick]),
     meck:new(inet, [unstick, passthrough]),
-    meck:new(fake_server).
+    meck:new(fake_server, [non_strict]).
 
 execute(ListenerPid) ->
     receive
@@ -801,17 +827,7 @@ execute(ListenerPid) ->
                TEST_NAME(active),
                TEST_NAME(passive)).
 
-mock_socket_response(S, R) ->
-    meck:expect(gen_tcp,
-                send,
-                fun(S2, R2) ->
-                        ?assertEqual(S, S2),
-                        ?assertEqual(R,
-                                     R2),
-                        ok
-                end).
-
-% Awkward, monadic interaction sequence testing
+%% Awkward, monadic interaction sequence testing
 script_dialog([]) ->
     meck:expect(gen_tcp,
                 recv,
@@ -848,22 +864,22 @@ script_dialog([{req, Socket, Request} | Rest]) ->
                         {ok, Request}
                 end).
 
-% executes the next step in the test script
+%% executes the next step in the test script
 step(Pid) ->
     Pid ! {ack, self()},
     receive
-        {new_state, _, _} ->
-            ok;
+        {new_state, _, State} ->
+            State;
         _ ->
             ?assert(fail)
     end.
 
-% stops the script
+%% stops the script
 finish(Pid) ->
     Pid ! {done, self()}.
 
 
-% Unit Tests %
+%% Unit Tests
 
 strip_newlines_test() ->
     "testing 1 2 3" = strip_newlines("testing 1 2 3\r\n"),
@@ -890,7 +906,7 @@ parse_address_test() ->
     error = parse_address("MEAT MEAT").
 
 
-% Functional/Integration Tests %
+%% Functional/Integration Tests
 
 authenticate_state(State) ->
     State#connection_state{authenticated_state=authenticated}.
@@ -933,61 +949,34 @@ authenticate_successful_test() ->
 
 authenticate_failure_test() ->
     setup(),
-    meck:expect(gen_tcp,
-                close,
-                fun(socket) -> ok end),
-    meck:expect(fake_server,
-                login,
-                fun(_, "meat", "meatmeat") ->
-                        {error}
-                end),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      receive
-                          {new_state, _, #connection_state{user_name="meat"}} ->
-                              ok
-                      end,
-                      ControlPid ! {ack, self()},
-
-                      receive
-                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
-                              ok
-                      end,
+                      script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
+                                     {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
+                      ok = meck:expect(gen_tcp, close, fun(socket) -> ok end),
+                      ok = meck:expect(fake_server, login, fun(_, "meat", "meatmeat") -> {error} end),
+                      ControlPid ! go,
+                      ?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
                       finish(ControlPid)
               end),
-    script_dialog([{"USER meat", "331 User name okay, need password.\r\n"},
-                  {"PASS meatmeat", "530 Login incorrect.\r\n"}]),
-    {ok, quit} = control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
-    meck:validate(fake_server),
-    meck:validate(gen_tcp),
-    meck:unload(inet),
-    meck:unload(fake_server),
-    meck:unload(gen_tcp).
+
+    execute(Child).
 
 unauthenticated_test() ->
-    meck:new(gen_tcp, [unstick]),
+    setup(),
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      mock_socket_response(socket, "530 Not logged in.\r\n"),
-                      receive
-                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
-                              ok
-                      end,
-                      ControlPid ! {ack, self()},
+                      script_dialog([  {"CWD /hamster", "530 Not logged in.\r\n"},
+                                       {"MKD /unicorns", "530 Not logged in.\r\n"}]),
 
-                      receive
-                          {new_state, _, #connection_state{authenticated_state=unauthenticated}} ->
-                              ok
-                      end,
-                      ControlPid ! {ack, self()}
+                      ControlPid ! go,
+                      ?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+                      ?assertMatch(#connection_state{authenticated_state=unauthenticated}, step(ControlPid)),
+                      finish(ControlPid)
               end),
-    script_dialog([{"CWD /hamster", "530 Not logged in.\r\n"},
-                  {"MKD /unicorns", "530 Not logged in.\r\n"}]),
-    control_loop(Child, {gen_tcp, socket}, #connection_state{module=fake_server}),
-    meck:validate(gen_tcp),
-    meck:unload(gen_tcp).
+    execute(Child).
 
 mkdir_test() ->
     setup(),
@@ -1149,9 +1138,9 @@ nlst_test(Mode) ->
                       meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
                       login_test_user_with_data_socket(ControlPid,
                                                        [{"NLST", "150 File status okay; about to open data connection.\r\n"},
-                                                       {resp, data_socket, "edward\r\n"},
-                                                       {resp, data_socket, "Aethelred\r\n"},
-                                                       {resp, socket, "226 Closing data connection.\r\n"}],
+                                                        {resp, data_socket, "edward\r\n"},
+                                                        {resp, data_socket, "Aethelred\r\n"},
+                                                        {resp, socket, "226 Closing data connection.\r\n"}],
                                                        Mode),
                       step(ControlPid),
                       finish(ControlPid)
@@ -1201,52 +1190,52 @@ remove_directory_test() ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-                     meck:expect(fake_server,
-                                 remove_directory,
-                                 fun(St, "/bison/burgers") ->
-                                         {ok, St}
-                                 end),
+              fun() ->
+                      meck:expect(fake_server,
+                                  remove_directory,
+                                  fun(St, "/bison/burgers") ->
+                                          {ok, St}
+                                  end),
 
-                     login_test_user(ControlPid, [{"RMD /bison/burgers", "200 Command okay.\r\n"},
-                                              {"RMD /bison/burgers", "550 Requested action not taken.\r\n"}]),
-                     step(ControlPid),
+                      login_test_user(ControlPid, [{"RMD /bison/burgers", "200 Command okay.\r\n"},
+                                                   {"RMD /bison/burgers", "550 Requested action not taken.\r\n"}]),
+                      step(ControlPid),
 
-                     meck:expect(fake_server,
-                                 remove_directory,
-                                 fun(_, "/bison/burgers") ->
-                                         {error, error}
-                                 end),
-                     step(ControlPid),
+                      meck:expect(fake_server,
+                                  remove_directory,
+                                  fun(_, "/bison/burgers") ->
+                                          {error, error}
+                                  end),
+                      step(ControlPid),
 
-                     finish(ControlPid)
-             end),
+                      finish(ControlPid)
+              end),
     execute(Child).
 
 remove_file_test() ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-                     meck:expect(fake_server,
-                                 remove_file,
-                                 fun(St, "cheese.txt") ->
-                                         {ok, St}
-                                 end),
+              fun() ->
+                      meck:expect(fake_server,
+                                  remove_file,
+                                  fun(St, "cheese.txt") ->
+                                          {ok, St}
+                                  end),
 
-                     login_test_user(ControlPid, [{"DELE cheese.txt", "200 Command okay.\r\n"},
-                                              {"DELE cheese.txt", "450 Requested file action not taken.\r\n"}]),
-                     step(ControlPid),
+                      login_test_user(ControlPid, [{"DELE cheese.txt", "200 Command okay.\r\n"},
+                                                   {"DELE cheese.txt", "450 Requested file action not taken.\r\n"}]),
+                      step(ControlPid),
 
-                     meck:expect(fake_server,
-                                 remove_file,
-                                 fun(_, "cheese.txt") ->
-                                         {error, error}
-                                 end),
+                      meck:expect(fake_server,
+                                  remove_file,
+                                  fun(_, "cheese.txt") ->
+                                          {error, error}
+                                  end),
 
-                     step(ControlPid),
-                     finish(ControlPid)
-             end),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
     execute(Child).
 
 ?dataSocketTest(stor_test).
@@ -1254,27 +1243,27 @@ stor_test(Mode) ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-                     Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
-                               {req, data_socket, <<"SOME DATA HERE">>},
-                               {resp, socket, "226 Closing data connection.\r\n"}
-                              ],
-                     meck:expect(fake_server,
-                                 put_file,
-                                 fun(S, "bologna.txt", write, F) ->
-                                         {ok, Data, DataSize} = F(),
-                                         BinData = <<"SOME DATA HERE">>,
-                                         ?assertEqual(Data, BinData),
-                                         ?assertEqual(DataSize, size(BinData)),
-                                         {ok, S}
-                                 end),
+              fun() ->
+                      Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                                {req, data_socket, <<"SOME DATA HERE">>},
+                                {resp, socket, "226 Closing data connection.\r\n"}
+                               ],
+                      meck:expect(fake_server,
+                                  put_file,
+                                  fun(S, "bologna.txt", write, F) ->
+                                          {ok, Data, DataSize} = F(),
+                                          BinData = <<"SOME DATA HERE">>,
+                                          ?assertEqual(Data, BinData),
+                                          ?assertEqual(DataSize, size(BinData)),
+                                          {ok, S}
+                                  end),
 
-                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
-                     login_test_user_with_data_socket(ControlPid, Script, Mode),
-                     step(ControlPid),
-                     finish(ControlPid)
-             end),
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
     execute(Child).
 
 ?dataSocketTest(stor_failure_test).
@@ -1282,24 +1271,24 @@ stor_failure_test(Mode) ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-                     Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
-                               {req, data_socket, <<"SOME DATA HERE">>},
-                               {resp, socket, "451 Error access_denied when storing a file.\r\n"}
-                              ],
-                     meck:expect(fake_server,
-                                 put_file,
-                                 fun(_, "bologna.txt", write, F) ->
-                                         F(),
-                                         {error, access_denied}
-                                 end),
+              fun() ->
+                      Script = [{"STOR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                                {req, data_socket, <<"SOME DATA HERE">>},
+                                {resp, socket, "451 Error access_denied when storing a file.\r\n"}
+                               ],
+                      meck:expect(fake_server,
+                                  put_file,
+                                  fun(_, "bologna.txt", write, F) ->
+                                          F(),
+                                          {error, access_denied}
+                                  end),
 
-                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
 
-                     login_test_user_with_data_socket(ControlPid, Script, Mode),
-                     step(ControlPid),
-                     finish(ControlPid)
-             end),
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
     execute(Child).
 
 ?dataSocketTest(retr_test).
@@ -1307,31 +1296,31 @@ retr_test(Mode) ->
     setup(),
     ControlPid = self(),
     Child = spawn_link(
-             fun() ->
-                     Script = [{"RETR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
-                               {resp, data_socket, "SOME DATA HERE"},
-                               {resp, data_socket, "SOME MORE DATA"},
-                               {resp, socket, "226 Closing data connection.\r\n"}],
-                     meck:expect(fake_server,
-                                 get_file,
-                                 fun(State, "bologna.txt") ->
-                                         {ok,
-                                          fun(1024) ->
-                                                  {ok,
-                                                   list_to_binary("SOME DATA HERE"),
-                                                   fun(1024) ->
-                                                           {ok,
-                                                            list_to_binary("SOME MORE DATA"),
-                                                            fun(1024) -> {done, State} end}
-                                                   end}
-                                          end}
-                                 end),
+              fun() ->
+                      Script = [{"RETR bologna.txt", "150 File status okay; about to open data connection.\r\n"},
+                                {resp, data_socket, "SOME DATA HERE"},
+                                {resp, data_socket, "SOME MORE DATA"},
+                                {resp, socket, "226 Closing data connection.\r\n"}],
+                      meck:expect(fake_server,
+                                  get_file,
+                                  fun(State, "bologna.txt") ->
+                                          {ok,
+                                           fun(1024) ->
+                                                   {ok,
+                                                    list_to_binary("SOME DATA HERE"),
+                                                    fun(1024) ->
+                                                            {ok,
+                                                             list_to_binary("SOME MORE DATA"),
+                                                             fun(1024) -> {done, State} end}
+                                                    end}
+                                           end}
+                                  end),
 
-                     meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-                     login_test_user_with_data_socket(ControlPid, Script, Mode),
-                     step(ControlPid),
-                     finish(ControlPid)
-             end),
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
     execute(Child).
 
 rein_test() ->
@@ -1501,6 +1490,104 @@ quit_test() ->
                       finish(ControlPid)
               end
              ),
+    execute(Child).
+
+feat_test() ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+                      login_test_user(ControlPid,
+                                      [{"FEAT", "211- Extensions supported:\r\n"},
+                                       {resp, socket, " UTF8\r\n" },
+                                       {resp, socket, "211 End\r\n" }]),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end
+             ),
+    execute(Child).
+
+?dataSocketTest(utf8_success_test).
+utf8_success_test(Mode) ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+                      FileName = "Молоко-Яйки", % milk-eggs
+                      UtfFileName = ucs2_to_utf8(FileName), % milk-eggs
+                      FileContent = <<"SOME DATA HERE">>,
+
+                      Script =[{"PWD " ++ UtfFileName, "257 \""++ UtfFileName ++"\"\r\n"},
+                               {"CWD " ++ UtfFileName, "250 directory changed to \""++ UtfFileName ++"\"\r\n"},
+                               {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"},
+                               {req, data_socket, FileContent },
+                               {resp, socket, "226 Closing data connection.\r\n"},
+                               {"LIST", "150 File status okay; about to open data connection.\r\n"},
+                               {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 "++UtfFileName++"\r\n"},
+                               {resp, socket, "226 Closing data connection.\r\n"},
+                               {"STOR " ++ UtfFileName, "150 File status okay; about to open data connection.\r\n"}
+                              ],
+
+                      meck:expect(fake_server,
+                                  current_directory,
+                                  fun(_) -> FileName end),
+
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
+
+                      meck:expect(fake_server,
+                                  change_directory,
+                                  fun(State, InFileName) ->
+                                          ?assertEqual(InFileName, FileName),
+                                          {ok, State}
+                                  end),
+                      step(ControlPid),
+
+                      meck:expect(fake_server,
+                                  put_file,
+                                  fun(S, InFileName, write, F) ->
+                                          ?assertEqual(InFileName, FileName),
+                                          {ok, Data, DataSize} = F(),
+                                          ?assertEqual(Data, FileContent),
+                                          ?assertEqual(DataSize, size(FileContent)),
+                                          {ok, S}
+                                  end),
+
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+                      step(ControlPid),
+
+                      meck:expect(fake_server,
+                                  list_files,
+                                  fun(_, _) ->
+                                          [#file_info{type=dir,name=FileName,mode=200,gid=0,uid=0,mtime={{3019,12,12},{12,12,12}},size=0}]
+                                  end),
+
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
+    execute(Child).
+
+?dataSocketTest(utf8_failure_test).
+utf8_failure_test(Mode) ->
+    setup(),
+    ControlPid = self(),
+    Child = spawn_link(
+              fun() ->
+                      FileName = "Молоко-Яйки", % milk-eggs
+                      UtfFileNameOk = ucs2_to_utf8(FileName), % milk-eggs
+                      { UtfFileName, _ } = lists:split(length(UtfFileNameOk)-1, UtfFileNameOk),
+
+                      Script =[{"CWD " ++ UtfFileName, "501 Syntax error in parameters or arguments.\r\n"}],
+
+                      meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+
+                      login_test_user_with_data_socket(ControlPid, Script, Mode),
+                      step(ControlPid),
+                      finish(ControlPid)
+              end),
     execute(Child).
 
 -endif.
