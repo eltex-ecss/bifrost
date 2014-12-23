@@ -96,7 +96,12 @@ await_connections(Listen, Supervisor) ->
             receive
                 {ack, Worker} ->
                     %% ssl:ssl_accept/2 will return {error, not_owner} otherwise
-                    ok = gen_tcp:controlling_process(Socket, Worker)
+                    case gen_tcp:controlling_process(Socket, Worker) of
+                        ok ->
+                            ok;
+                        {error, Reason} ->
+                            exit(Reason)
+                    end
             end;
         _Error ->
             exit(bad_accept)
