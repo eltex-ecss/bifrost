@@ -366,8 +366,8 @@ ftp_command(Mod, Socket, State, pwd, _, _) ->
     respond(Socket, 257, "\"" ++ Mod:current_directory(State) ++ "\""),
     {ok, State};
 
-ftp_command(Mod, Socket, State, cdup, _, _) ->
-    ftp_command(Mod, Socket, State, cwd, "..");
+ftp_command(Mod, Socket, State, cdup, _Options, _) ->
+    ftp_command(Mod, Socket, State, cwd, _Options, "..");
 
 ftp_command(Mod, Socket, State, cwd, _, Arg) ->
     case Mod:change_directory(State, Arg) of
