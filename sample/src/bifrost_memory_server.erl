@@ -14,6 +14,7 @@
 % Bifrost callbacks
 -export([login/3,
          init/2,
+         check_user/2,
          current_directory/1,
          make_directory/2,
          change_directory/2,
@@ -26,7 +27,7 @@
          rename_file/3,
          site_command/3,
          site_help/1,
-         disconnect/1]).
+         disconnect/2]).
 
 -ifdef(debug).
 -compile(export_all).
@@ -47,6 +48,15 @@
 % Initialize the state
 init(InitialState, _) ->
     InitialState.
+
+% All users w/o any requirements
+check_user(State, Username) ->
+  case Username of
+    "root" ->
+      {error, "root account is locked for ftp", State};
+    _Another ->
+      {ok, State}
+  end.
 
 % Authenticate the user. Return {false, State} to fail.
 login(State, _Username, _Password) ->
@@ -92,7 +102,7 @@ change_directory(State, Directory) ->
             {error, State}
     end.
 
-disconnect(_) ->
+disconnect(_, Reason) ->
     ok.
 
 % Delete a file
@@ -166,6 +176,11 @@ list_files(State, _Options, Directory) ->
 % mode could be append or write, but we're only supporting
 % write.
 % FileRetrievalFun is fun() and returns {ok, Bytes, Count} or done
+
+% Upload notification is arriving during it with FileRetrievalFun == notification
+% and _Status done or terminated
+put_file(State, _ProvidedFileName, notification, _Status) ->
+ {ok, State};
 put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     FileName = lists:last(string:tokens(ProvidedFileName, "/")),
     Target = absolute_path(State, FileName),

@@ -9,7 +9,10 @@
           rnfr = undefined,
           module,
           module_state,
-          ssl_allowed = false,
+          ssl_mode = disabled, % 'disabled' - NO SSL
+                               % 'enabled' - allowed SSL and FTP
+                               % 'only' - non secured FTP is not allowed
+                               % old true and false also supported
           ssl_cert = undefined,
           ssl_key = undefined,
           ssl_ca_cert = undefined,
@@ -17,8 +20,17 @@
           pb_size = 0,
           control_socket = undefined,
           ssl_socket = undefined,
-          utf8 = false
-         }).
+          utf8 = true,
+          recv_block_size = 64*1024,
+          send_block_size = 64*1024,
+          prev_cmd_notify = undefined, % previous command notification data { command, Arguments } | undefined
+          control_timeout = infinity, % control connection timeout for prev-command notification = tcp_gen:timeout()
+          port_range = 0 % passive mode's port's range:
+                         % 0 = ANY,
+                         % N = {N, 65535}
+                         % {minPort, maxPort}
+                         % another values - will be skipped         
+        }).
 
 -record(file_info,
         {
