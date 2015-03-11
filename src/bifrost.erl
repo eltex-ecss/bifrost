@@ -73,13 +73,13 @@ init([HookModule, Opts]) ->
                                                          recv_block_size = RecvBlockSize,
                                                          send_block_size = SendBlockSize,
                                                          control_timeout = ControlTimeout,
-                                                         port_range = PortRange},                                                     
+                                                         port_range = PortRange},
                 Self = self(),
                 Supervisor = proc_lib:spawn_link(?MODULE,
                                                  supervise_connections,
                                                  [Self, HookModule:init(InitialState, Opts)]),
                 proc_lib:spawn_link(?MODULE,
-%                                 await_connections,
+                                    await_connections,
                                     [Listen, Supervisor]),
                 {ok, {listen_socket, Listen}};
             {error, Error} ->
@@ -273,8 +273,8 @@ respond_raw({SocketMod, Socket}, Line) ->
 respond_feature(Socket, Name, true) ->
     respond_raw(Socket, " " ++ Name);
 respond_feature(_Socket, _Name, false) ->
-    ok.    
-    
+    ok.
+
 ssl_options(State) ->
     [{keyfile, State#connection_state.ssl_key},
      {certfile, State#connection_state.ssl_cert},
@@ -348,7 +348,7 @@ pasv_connection(ControlSocket, State) ->
             end
     end.
 
-    
+
 %%-------------------------------------------------------------------------------
 %% put_file (stor) need a notification - when next command arrived there is a grarantee
 %% that previouse 'stor' command was executed successfully
@@ -412,8 +412,8 @@ ftp_result(_State, Data) ->
 ftp_result(State, Data, UserFunction) ->
     ftp_result(State, UserFunction(State, Data)).
 
- 
- 
+
+
 %%-------------------------------------------------------------------------------
 %% FTP COMMANDS
 ftp_command(Socket, State, Command, Options, RawArg) ->
@@ -786,7 +786,7 @@ write_fun(SendBlockSize,Socket, Fun) ->
         {done, NewState} ->
             {ok, NewState};
         Another -> % errors and etc
-            Another            
+            Another
     end.
 
 strip_newlines(S) ->
@@ -807,7 +807,7 @@ parse_input(Input) ->
           end,
     {Options, Args} = lists:foldl(Fun, {[], []}, Other),
     {list_to_atom(string:to_lower(strip_newlines(Command))), lists:reverse(Options), string:join(lists:reverse(Args), " ")}.
-    
+
 list_files_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
                       bf_send(DataSocket,
@@ -817,7 +817,7 @@ list_files_to_socket(DataSocket, Files) ->
 
 list_file_names_to_socket(DataSocket, Files) ->
     lists:map(fun(Info) ->
-                      bf_send(DataSocket, 
+                      bf_send(DataSocket,
                       to_utf8(Info#file_info.name) ++ "\r\n") end,
               Files),
     ok.
@@ -1024,7 +1024,7 @@ to_utf8(String, true) ->
 to_utf8(String, false) ->
     [if C > 255 orelse C<0 -> $?; true -> C end || C <- String].
 
-    
+
 -ifdef(TEST).
 
 %% EUNIT TESTS %%
@@ -1039,7 +1039,7 @@ setup() ->
     ok = meck:new(fake_server, [non_strict]),
     ok = meck:expect(fake_server, init, fun(InitialState, _Opt) -> InitialState end),
     ok = meck:expect(fake_server, disconnect, fun(_, {error, breaked}) -> ok end).
- 
+
 execute(ListenerPid) ->
     State = fake_server:init(#connection_state{module=fake_server}, []),
     receive
@@ -1198,7 +1198,7 @@ ftp_result_test() ->
     ?assertMatch({ok, [help_info]}, ftp_result(State, {ok, [help_info]})), %site_help
     ?assertMatch({error, undef, NewState}, ftp_result(State, {error, NewState})), %site_help
     ok.
-    
+
 %% Functional/Integration Tests
 
 login_test_user(SocketPid) ->
@@ -1270,7 +1270,7 @@ requirements_failure_test() ->
                     end),
     execute(Child).
 
-    
+
 unauthenticated_test() ->
     setup(),
     ControlPid = self(),
@@ -1312,7 +1312,7 @@ ssl_only_test() ->
                             finish(ControlPid)
                        end),
     execute(Child).
-    
+
 mkdir_test() ->
     setup(),
     ControlPid = self(),
@@ -1627,7 +1627,7 @@ stor_test(Mode) ->
     setup(),
     ControlPid = self(),
     ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
-                                            InitialState#connection_state{recv_block_size = 1024*1024} end),    
+                                            InitialState#connection_state{recv_block_size = 1024*1024} end),
     Child = spawn_link(
               fun() ->
                       Script = [{"STOR file.txt", "150 File status okay; about to open data connection.\r\n"},
@@ -1748,7 +1748,7 @@ stor_user_failure_test(Mode) ->
             finish(ControlPid)
         end),
     execute(Child).
-    
+
 ?dataSocketTest(stor_failure_test).
 stor_failure_test(Mode) ->
     setup(),
@@ -1780,7 +1780,7 @@ stor_failure_test(Mode) ->
     execute(Child).
 
 ?dataSocketTest(retr_test).
-retr_test(Mode) ->   
+retr_test(Mode) ->
     setup(),
     ok = meck:expect(fake_server, init, fun(InitialState, _Opt) ->
                                             InitialState#connection_state{send_block_size=1024*1024} end),

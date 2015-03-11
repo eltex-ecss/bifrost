@@ -34,7 +34,7 @@ behaviour_info(callbacks) ->
     {current_directory, 1}, % State -> Path
     {make_directory, 2}, % State, Path -> StateChange
     {change_directory, 2}, % State, Path -> StateChange
-    {list_files, 2}, % State, Path -> [FileInfo] | StateChangeError
+    {list_files, 3}, % State, Options, Path -> [FileInfo] | StateChangeError
 
     {remove_directory, 2}, % State, Path -> StateChange
     {remove_file, 2}, % State, Path -> StateChange
