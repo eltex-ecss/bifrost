@@ -10,7 +10,7 @@
 -include("bifrost.hrl").
 
 -ifdef(TEST).
--compile([export_all]).
+-compile(export_all).
 -else.
 -export([
          start_link/2,
@@ -98,15 +98,16 @@ init([HookModule, Opts]) ->
                                     [Listen, Supervisor]),
                 {ok, {listen_socket, Listen}};
             {error, Error} ->
-                {stop, Error}
+                error_logger:error_report({bifrost, init_error, Error}),
+                ignore
         end
     catch
         _Type0:{stop, Reason} ->
             error_logger:error_report({bifrost, init_error, Reason}),
-            {stop, Reason};
+            ignore;
         _Type1:Exception ->
             error_logger:error_report({bifrost, init_exception, Exception}),
-            {stop, Exception}
+            ignore
     end.
 
 %-------------------------------------------------------------------------------
