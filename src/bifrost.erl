@@ -96,17 +96,21 @@ init([HookModule, Opts]) ->
                 proc_lib:spawn_link(?MODULE,
                                     await_connections,
                                     [Listen, Supervisor]),
+                HookModule:clean_alarm(),
                 {ok, {listen_socket, Listen}};
             {error, Error} ->
                 error_logger:error_report({bifrost, init_error, Error}),
+                HookModule:set_alarm(Error),
                 ignore
         end
     catch
         _Type0:{stop, Reason} ->
             error_logger:error_report({bifrost, init_error, Reason}),
+            HookModule:set_alarm(Reason),
             ignore;
         _Type1:Exception ->
             error_logger:error_report({bifrost, init_exception, Exception}),
+            HookModule:set_alarm(Exception),
             ignore
     end.
 
