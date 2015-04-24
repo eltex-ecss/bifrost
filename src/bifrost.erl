@@ -76,9 +76,9 @@ init([HookModule, Opts]) ->
                         _AnotherValue ->
                             throw({stop, lists:flatten(io_lib:format("Invalid port_range ~p", [_AnotherValue]))})
                     end,
-        case listen_socket(Port, [{active, false}, {reuseaddr, true}, list]) of
+        IpAddress = proplists:get_value(ip_address, Opts, {0,0,0,0}),
+        case listen_socket(Port, [{active, false}, {reuseaddr, true}, list, {ip, IpAddress}]) of
             {ok, Listen} ->
-                IpAddress = proplists:get_value(ip_address, Opts, get_socket_addr(Listen)),
                 InitialState = DefState#connection_state{ip_address = IpAddress,
                                                          ssl_mode = SslMode,
                                                          ssl_key = SslKey,
