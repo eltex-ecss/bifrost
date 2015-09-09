@@ -25,6 +25,8 @@
           send_block_size = 64*1024,
           prev_cmd_notify = undefined, % previous command notification data { command, Arguments } | undefined
           control_timeout = infinity, % control connection timeout for prev-command notification = tcp_gen:timeout()
+          establish_active_connection_timeout = 60 * 1000 :: pos_integer() | infinity, % timeout on wait establish active connection (60 sec)
+          establish_passive_connection_timeout = 60 * 1000 :: pos_integer() | infinity, % timeout on wait establish passive connection (60 sec)
           port_range = 0 % passive mode's port's range:
                          % 0 = ANY,
                          % N = {N, 65535}

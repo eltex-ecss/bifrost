@@ -73,10 +73,28 @@ init([HookModule, Opts]) ->
                         {N,M} when is_integer(N), N>=0, ?MAX_TCPIP_PORT>=N andalso
                                    is_integer(M), M>=0, ?MAX_TCPIP_PORT>=M, M>=N ->
                             {N, M};
-                        _AnotherValue ->
-                            throw({stop, lists:flatten(io_lib:format("Invalid port_range ~p", [_AnotherValue]))})
+                        _AnotherValue1 ->
+                            throw({stop, lists:flatten(io_lib:format("Invalid port_range ~p", [_AnotherValue1]))})
                     end,
         IpAddress = proplists:get_value(ip_address, Opts, {0,0,0,0}),
+        EActiveConnectionTimeout =
+            case proplists:get_value(establish_active_connection_timeout, Opts, DefState#connection_state.establish_active_connection_timeout) of
+                EstablishATimeout when is_integer(EstablishATimeout), EstablishATimeout > 0 ->
+                    EstablishATimeout;
+                infinity ->
+                    infinity;
+                _AnotherValue2 ->
+                    throw({stop, lists:flatten(io_lib:format("Invalid establish_active_connection_timeout ~p", [_AnotherValue2]))})
+            end,
+        EPassiveConnectionTimeout =
+            case proplists:get_value(establish_passive_connection_timeout, Opts, DefState#connection_state.establish_passive_connection_timeout) of
+                EstablishPTimeout when is_integer(EstablishPTimeout), EstablishPTimeout > 0 ->
+                    EstablishPTimeout;
+                infinity ->
+                    infinity;
+                _AnotherValue3 ->
+                    throw({stop, lists:flatten(io_lib:format("Invalid establish_passive_connection_timeout ~p", [_AnotherValue3]))})
+            end,
         case listen_socket(Port, [{active, false}, {reuseaddr, true}, list, {ip, IpAddress}]) of
             {ok, Listen} ->
                 InitialState = DefState#connection_state{ip_address = IpAddress,
@@ -88,6 +106,8 @@ init([HookModule, Opts]) ->
                                                          recv_block_size = RecvBlockSize,
                                                          send_block_size = SendBlockSize,
                                                          control_timeout = ControlTimeout,
+                                                         establish_active_connection_timeout = EActiveConnectionTimeout,
+                                                         establish_passive_connection_timeout = EPassiveConnectionTimeout,
                                                          port_range = PortRange},
                 Self = self(),
                 Supervisor = proc_lib:spawn_link(?MODULE,
@@ -329,12 +349,12 @@ data_connection(ControlSocket, State) ->
     end.
 
 %% passive -- accepts an inbound connection
-establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}}) ->
-    gen_tcp:accept(Listen);
+establish_data_connection(#connection_state{pasv_listen={passive, Listen, _}, establish_passive_connection_timeout=Timeout}) ->
+    gen_tcp:accept(Listen, Timeout);
 
 %% active -- establishes an outbound connection
-establish_data_connection(#connection_state{data_port={active, Addr, Port}}) ->
-    gen_tcp:connect(Addr, Port, [{active, false}, binary]).
+establish_data_connection(#connection_state{data_port={active, Addr, Port}, establish_active_connection_timeout=Timeout}) ->
+    gen_tcp:connect(Addr, Port, [{active, false}, binary], Timeout).
 
 pasv_connection(ControlSocket, State) ->
     case State#connection_state.pasv_listen of
