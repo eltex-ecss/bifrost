@@ -170,7 +170,7 @@ listen_socket({Start, End}, _TcpOpts, _NextPort) when End < Start ->
 
 listen_socket({Start, End}, TcpOpts, random) ->
     %% if the for [Start, End] Start<End => Start-1 < End and we have additional item for test
-    listen_socket({Start-1, End}, TcpOpts, random:uniform(End-Start+1)+Start-1);
+    listen_socket({Start-1, End}, TcpOpts, rand:uniform(End-Start+1)+Start-1);
 
 listen_socket({Start, End}, TcpOpts, TryPort) when is_integer(TryPort) ->
     case listen_socket(TryPort, TcpOpts) of
