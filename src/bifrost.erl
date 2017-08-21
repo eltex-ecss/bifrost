@@ -308,6 +308,13 @@ respond({SocketMod, Socket}, ResponseCode, Message) ->
     SocketMod:send(Socket, Line).
 
 %-------------------------------------------------------------------------------
+respondError(Socket, {Code, Message}, _Default) when is_integer(Code) ->
+    respond(Socket, Code, Message);
+
+respondError(Socket, Reason, {Code, Message}) ->
+    respond(Socket, Code, format_error(Message, Reason)).
+
+%-------------------------------------------------------------------------------
 respond_raw({SocketMod, Socket}, Line) ->
     SocketMod:send(Socket, to_utf8(Line) ++ "\r\n").
 
@@ -551,10 +558,10 @@ ftp_command(Mod, Socket, State, user, Arg) ->
     		respond(Socket, 331),
 	    	{ok, NewState#connection_state{user_name=Arg, authenticated_state=unauthenticated}};
 
-	{error, Reason, _State} ->
-		error_logger:warning_report({?REPORT_TAG, {command, user, Reason, State}}),
-    	respond(Socket, 421, format_error("Login requirements", Reason)),
-		{error, auth}
+        {error, Reason, _State} ->
+    		error_logger:warning_report({?REPORT_TAG, {command, user, Reason, State}}),
+            respondError(Socket, Reason, {421, "Login requirements"}),
+		    {error, auth}
 	end;
 
 ftp_command(_, Socket, State, port, Arg) ->
@@ -602,7 +609,7 @@ ftp_command(Mod, Socket, State, cwd, Arg) ->
 			respond(Socket, 250, "Directory changed to \"" ++ Mod:current_directory(NewState) ++ "\"."),
             {ok, NewState};
         {error, Reason, NewState} ->
-            respond(Socket, 550, format_error("Unable to change directory", Reason)),
+            respondError(Socket, Reason, {550, "Unable to change directory"}),
             {ok, NewState}
     end;
 
@@ -612,14 +619,14 @@ ftp_command(Mod, Socket, State, mkd, Arg) ->
             respond(Socket, 250, "\"" ++ Arg ++ "\" directory created."),
             {ok, NewState};
         {error, Reason, NewState} ->
-            respond(Socket, 550, format_error("Unable to create directory", Reason)),
+            respondError(Socket, Reason, {550, "Unable to create directory"}),
             {ok, NewState}
     end;
 
 ftp_command(Mod, Socket, State, nlst, Arg) ->
     case ftp_result(State, Mod:list_files(State, Arg)) of
         {error, Reason, NewState} ->
-            respond(Socket, 451, format_error("Unable to list", Reason)),
+            respondError(Socket, Reason, {451, "Unable to list"}),
             {ok, NewState};
         Files when is_list(Files)->
             DataSocket = data_connection(Socket, State),
@@ -632,7 +639,7 @@ ftp_command(Mod, Socket, State, nlst, Arg) ->
 ftp_command(Mod, Socket, State, list, Arg) ->
     case ftp_result(State, Mod:list_files(State, Arg)) of
         {error, Reason, NewState} ->
-            respond(Socket, 451, format_error("Unable to list", Reason)),
+            respondError(Socket, Reason, {451, "Unable to list"}),
             {ok, NewState};
         Files when is_list(Files)->
             DataSocket = data_connection(Socket, State),
@@ -648,7 +655,7 @@ ftp_command(Mod, Socket, State, rmd, Arg) ->
             respond(Socket, 200),
             {ok, NewState};
         {error, Reason, NewState} ->
-            respond(Socket, 550, format_error("Unable to remove directory", Reason)),
+            respondError(Socket, Reason, {550, "Unable to remove directory"}),
             {ok, NewState}
         end;
 
@@ -662,7 +669,7 @@ ftp_command(Mod, Socket, State, dele, Arg) ->
             respond(Socket, 250), % see RFC 959
             {ok, NewState};
         {error, Reason, NewState} ->
-            respond(Socket, 450, format_error("Unable to delete file", Reason)),
+            respondError(Socket, Reason, {450, "Unable to delete file"}),
             {ok, NewState}
         end;
 
@@ -677,11 +684,11 @@ ftp_command(Mod, Socket, State, stor, Arg) ->
                   end
           end,
     RetState = case ftp_result(State, Mod:put_file(State, Arg, write, Fun)) of
-                   {ok, NewState} ->
+                    {ok, NewState} ->
                        respond(Socket, 226),
 					   NewState;
-					{error, Reason, NewState} ->
-                       respond(Socket, 451, format("Error ~p when storing a file.", [Reason])),
+				    {error, Reason, NewState} ->
+                       respondError(Socket, Reason, {451, "Unable to store file"}),
                        NewState#connection_state{prev_cmd_notify=undefined}
                end,
     bf_close(DataSocket),
@@ -708,14 +715,14 @@ ftp_command(Mod, Socket, State, site, Arg) ->
             respond(Socket, 500),
             {ok, NewState};
         {error, Reason, NewState} ->
-            respond(Socket, 501, format("Error completing command (~p).", [Reason])),
+            respondError(Socket, Reason, {501, "Error completing command"}),
             {ok, NewState}
     end;
 
 ftp_command(Mod, Socket, State, site_help, _) ->
     case ftp_result(State, Mod:site_help(State)) of
         {error, Reason, NewState} ->
-            respond(Socket, 500, format_error("Unable to help site", Reason)),
+            respondError(Socket, Reason, {500, "Unable to help site"}),
 			{ok, NewState};
         {ok, []} ->
             respond(Socket, 500),
@@ -756,12 +763,12 @@ ftp_command(Mod, Socket, State, retr, Arg) ->
 
 				  {error, Reason, NewState} ->
                   	bf_close(DataSocket),
-					respond(Socket, 451, format_error("Unable to get file", Reason)),
+					respondError(Socket,Reason, {451, "Unable to get file"}),
                     {ok, NewState}
 				  end;
 
 			{error, Reason, NewState} ->
-				  respond(Socket, 550, format_error("Unable to get file", Reason)),
+				  respondError(Socket, Reason, {550, "Unable to get file"}),
                   {ok, NewState}
         end
     catch
@@ -777,7 +784,7 @@ ftp_command(Mod, Socket, State, mdtm, Arg) ->
             respond(Socket, 213, format_mdtm_date(FileInfo#file_info.mtime)),
     		{ok, State};
         {error, Reason, NewState} ->
-            respond(Socket, 550, format_error(550, Reason)),
+            respondError(Socket, Reason, {550, "File unavailable"}),
 			{ok, NewState}
     end;
 
@@ -793,7 +800,7 @@ ftp_command(Mod, Socket, State, rnto, Arg) ->
         Rnfr ->
             case ftp_result(State, Mod:rename_file(State, Rnfr, Arg)) of
                 {error, Reason, NewState} ->
-				    respond(Socket, 550, io_lib:format("Unable to rename (~p).", [Reason])),
+				    respondError(Socket, Reason, {550, "Unable to rename"}),
                     {ok, NewState};
                 {ok, NewState} ->
                     respond(Socket, 250, "Rename successful."),
@@ -1779,18 +1786,26 @@ nlst_test(Mode) ->
                 end),
     ControlPid = self(),
     Child = spawn_link(
-              fun() ->
-                      ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-			          ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
-                      login_test_user_with_data_socket(ControlPid,
-                                                       [{"NLST", "150 File status okay; about to open data connection.\r\n"},
-                                                       {resp, data_socket, "edward\r\n"},
-                                                       {resp, data_socket, "Aethelred\r\n"},
-                                                       {resp, socket, "226 Closing data connection.\r\n"}],
-                                                       Mode),
-                      step(ControlPid),
-                      finish(ControlPid)
-              end),
+    fun() ->
+        ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+        ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+        login_test_user_with_data_socket(ControlPid, 
+            [   {"NLST", "150 File status okay; about to open data connection.\r\n"},
+                {resp, data_socket, "edward\r\n"}, {resp, data_socket, "Aethelred\r\n"},
+                {resp, socket, "226 Closing data connection.\r\n"},
+                {"NLST", "451 Unable to list.\r\n"},
+                {"NLST", "451 Unable to list (Default Error).\r\n"},
+                {"NLST", "450 Locked system.\r\n"}  ],
+            Mode),
+        step(ControlPid),
+        ok = meck:expect(fake_server, list_files, fun(_State, _) -> error end),
+        step(ControlPid),
+        ok = meck:expect(fake_server, list_files, fun(_State, _) -> {error, "Default Error"} end),
+        step(ControlPid),
+        ok = meck:expect(fake_server, list_files, fun(_State, _) -> {error, {450, "Locked system."}} end),
+        step(ControlPid),
+        finish(ControlPid)
+    end),
     execute(Child).
 
 ?dataSocketTest(list_test).
@@ -1820,13 +1835,20 @@ list_test(Mode) ->
                       Script = [{"LIST", "150 File status okay; about to open data connection.\r\n"},
                                 {resp, data_socket, "-rwxrwxrwx  1     0     0      512 Dec 12 12:12 edward\r\n"},
                                 {resp, data_socket, "d-wx--x---  4     0     0        0 Dec 12 12:12 Aethelred\r\n"},
-                                {resp, socket, "226 Closing data connection.\r\n"}],
+                                {resp, socket, "226 Closing data connection.\r\n"},
+                                {"LIST", "451 Unable to list (Some Error).\r\n"},
+                                {"LIST", "552 Action interrupted; Out of RAM.\r\n"} ],
 
-                      ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
-					  ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
-                      login_test_user_with_data_socket(ControlPid,Script,Mode),
-                      step(ControlPid),
-                      finish(ControlPid)
+                    ok = meck:expect(gen_tcp, close, fun(data_socket) -> ok end),
+		    ok = meck:expect(inet, setopts, fun(data_socket,[{recbuf, _Size}]) -> ok end),
+                    login_test_user_with_data_socket(ControlPid,Script,Mode),
+                    step(ControlPid),
+                    ok = meck:expect(fake_server, list_files, fun(_State, _) -> {error, "Some Error"} end),
+                    step(ControlPid),
+                    ok = meck:expect(fake_server, list_files, 
+                        fun(_State, _) -> {error, {552, "Action interrupted; Out of RAM."}} end),
+                    step(ControlPid),
+                    finish(ControlPid)
               end),
     execute(Child).
 
@@ -1842,15 +1864,18 @@ remove_file_test() ->
                                  end),
 
                      login_test_user(ControlPid, [{"DELE cheese.txt", "250 Requested file action okay, completed.\r\n"},
-                                              {"DELE cheese.txt", "450 Unable to delete file.\r\n"}]),
+                                              {"DELE cheese.txt", "450 Unable to delete file.\r\n"},
+                                              {"DELE cheese.txt", "450 Unable to delete file (Not found).\r\n"},
+                                              {"DELE cheese.txt", "553 Only latin chars.\r\n"}]),
                      step(ControlPid),
-
-                     meck:expect(fake_server,
-                                 remove_file,
-                                 fun(_, "cheese.txt") ->
-                                         {error, error}
-                                 end),
-
+                     meck:expect(fake_server,remove_file,
+                        fun(_, "cheese.txt") -> {error, error} end),
+                     step(ControlPid),
+                     meck:expect(fake_server,remove_file,
+                        fun(_, "cheese.txt") -> {error, "Not found"} end),
+                     step(ControlPid),
+                     meck:expect(fake_server,remove_file,
+                        fun(_, "cheese.txt") -> {error, {553, "Only latin chars."} } end),
                      step(ControlPid),
                      finish(ControlPid)
              end),
@@ -1895,8 +1920,6 @@ stor_test(Mode) ->
 
                      ok = meck:expect(fake_server,	current_directory,	fun(_) -> "/" end),
                      step(ControlPid), % PWD
-
-
                      finish(ControlPid)
              end),
     execute(Child).
@@ -1909,7 +1932,7 @@ stor_user_failure_test(Mode) ->
 		fun() ->
 			Script=[	{"STOR elif.txt", "150 File status okay; about to open data connection.\r\n"},
 						{req, data_socket, <<"SOME DATA HERE">>},
-						{resp, socket, "451 Error access_denied when storing a file.\r\n"},
+						{resp, socket, "451 Unable to store file (access_denied).\r\n"},
 						{"QUIT", "200 Goodbye.\r\n"}],
 			ok = meck:expect(fake_server, put_file,
 					fun(_, "elif.txt", write, F) ->
@@ -1994,7 +2017,7 @@ stor_failure_test(Mode) ->
 		fun() ->
 			Script=[	{"STOR elif.txt", "150 File status okay; about to open data connection.\r\n"},
 						{req, data_socket, <<"SOME DATA HERE">>},
-						{resp, socket, "451 Error access_denied when storing a file.\r\n"},
+						{resp, socket, "451 Unable to store file (access_denied).\r\n"},
 						{"QUIT", "200 Goodbye.\r\n"}],
 			ok = meck:expect(fake_server, put_file,
 					fun(_, "elif.txt", write, F) ->
@@ -2071,7 +2094,7 @@ retr_failure_test(Mode) ->
                                                   {ok,
                                                    list_to_binary("SOME DATA HERE"),
                                                    fun(1024) ->
-												   			{error, "Disk error", State}
+                                                    {error, "Disk error", State}
                                                    end}
                                           end}
                                  end),
@@ -2125,14 +2148,19 @@ mdtm_truncate_test() ->
     ControlPid = self(),
     Child = spawn_link(
               fun() ->
-                      meck:expect(fake_server,
-                                  file_info,
+                      ok = meck:expect(fake_server, file_info,
                                   fun(_, "mould.txt") ->
                                           {ok,
                                            #file_info{type=file,
                                                       mtime={{2012,2,3},{16,3,11.933844}}}}
                                   end),
-                      login_test_user(ControlPid, [{"MDTM mould.txt", "213 20120203160311\r\n"}]),
+                      login_test_user(ControlPid, [{"MDTM mould.txt", "213 20120203160311\r\n"},
+                                                   {"MDTM mould.txt", "550 File unavailable (Bad file name).\r\n"}]),
+                      step(ControlPid),
+                      ok = meck:expect(fake_server, file_info,
+                                  fun(State, "mould.txt") ->
+                                          {error, "Bad file name", State}
+                                    end),
                       step(ControlPid),
                       finish(ControlPid)
               end),
@@ -2148,7 +2176,6 @@ rnfr_rnto_test() ->
                                        {"RNFR cheese.txt", "350 Ready for RNTO.\r\n"},
                                        {"RNTO mushrooms.txt", "250 Rename successful.\r\n"}]),
                       step(ControlPid),
-
                       meck:expect(fake_server,
                                   rename_file,
                                   fun(S, "cheese.txt", "mushrooms.txt") ->
@@ -2213,8 +2240,24 @@ help_site_test() ->
                                   end),
                       Script = [{"HELP SITE", "214-The following commands are recognized\r\n"},
                                 {resp, socket, "MEAT : devour the flesh of beasts.\r\n"},
-                                {resp, socket, "214 Help OK\r\n"}],
+                                {resp, socket, "214 Help OK\r\n"},
+                                {"HELP SITE", "500 Syntax error, command unrecognized.\r\n"},
+                                {"HELP SITE", "500 Unable to help site (Not implemented).\r\n"},
+                                {"HELP SITE", "502 Command 'HELP' not implemented.\r\n"}
+                               ],
                       login_test_user(ControlPid, Script),
+                      step(ControlPid),
+                      meck:expect(fake_server, site_help, fun(_State) -> {ok, []} end),
+                      step(ControlPid),
+                      meck:expect(fake_server, site_help, 
+                            fun(State) -> 
+                                {error, "Not implemented", State}
+                            end),
+                      step(ControlPid),
+                      meck:expect(fake_server, site_help, 
+                            fun(State) -> 
+                                {error, {502, "Command 'HELP' not implemented."}, State}
+                            end),
                       step(ControlPid),
                       finish(ControlPid)
               end
