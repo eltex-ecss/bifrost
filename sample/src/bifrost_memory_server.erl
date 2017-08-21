@@ -187,12 +187,16 @@ put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     Target = absolute_path(State, FileName),
     ModState = get_module_state(State),
     Fs = get_fs(ModState),
-    {ok, FileBytes, FileSize} = read_from_fun(FileRetrievalFun),
-    NewFs= set_path(Fs, Target, {file,
+    case read_from_fun(FileRetrievalFun) of
+        {ok, FileBytes, FileSize} ->
+            NewFs= set_path(Fs, Target, {file,
                                  FileBytes,
                                  new_file_info(FileName, file, FileSize)}),
-    NewModState = ModState#msrv_state{fs=NewFs},
-    {ok, set_module_state(State, NewModState)}.
+            NewModState = ModState#msrv_state{fs=NewFs},
+            {ok, set_module_state(State, NewModState)};
+        {error, Reason} ->
+            {error, Reason, State}
+    end.
 
 % Returns {ok, fun(ByteCount)}, which is a function that reads ByteCount byes
 % and itself returns a continuation until {done, State} is returned.
@@ -227,13 +231,17 @@ site_help(_) ->
     {error, not_found}.
 
 % Memory Server-specific Functions
-
 read_from_fun(Fun) ->
     read_from_fun([], 0, Fun).
+
 read_from_fun(Buffer, Count, Fun) ->
     case Fun() of
+        {ok, _Bytes, ReadCount} when Count + ReadCount >= 1024*1024 ->
+            {error, {550, "No space left on device."} };
+
         {ok, Bytes, ReadCount} ->
             read_from_fun(Buffer ++ [Bytes], Count + ReadCount, Fun);
+
         done ->
             {ok, Buffer, Count}
     end.
