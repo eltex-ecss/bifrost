@@ -11,9 +11,10 @@
 -type fileinfo() 	:: #file_info{}.
 -type filepath()	:: file:filename().
 -type stateok()		:: {ok, state()}.
--type stateerror()	:: {error, term(), state()} | {error, term()}.
-												% {error, Reason}
-												% {error, state()}
+-type stateerror()      :: error | {error} |  % default error
+                           {error, term()} | {error, term(), state()} | % default error with comment
+                           {error, {pos_integer(), term()}} | % error with custom code and message
+                           {error, {pos_integer(), term()}, state()}. % error with custom code and message and new state
 
 -type statechange()	:: stateok() | stateerror().
 -type helpinfo()	:: {Name::string(), Description::string()}.
