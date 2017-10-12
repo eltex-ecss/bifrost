@@ -809,9 +809,15 @@ ftp_command(Mod, Socket, State, xpwd, Options, Arg) ->
 ftp_command(Mod, Socket, State, xrmd, Options, Arg) ->
     ftp_command(Mod, Socket, State, rmd, Options, Arg);
 
-ftp_command(_Mod, Socket, State, size, _, _Arg) ->
-    respond(Socket, 550),
-    {ok, State};
+ftp_command(_Mod, Socket, #connection_state{module = Mod} = State, size, _, Arg) ->
+    case ftp_result(State, Mod:file_info(State, Arg)) of
+        {ok, FileInfo} ->
+            respond(Socket, 213, erlang:integer_to_list(FileInfo#file_info.size)),
+            {ok, State};
+        {error, Reason, NewState} ->
+            respond(Socket, 550, format_error(550, Reason)),
+            {ok, NewState}
+    end;
 
 ftp_command(_, Socket, State, Command, _, _Arg) ->
     error_logger:warning_report({bifrost, unrecognized_command, Command}),
