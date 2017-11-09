@@ -8,7 +8,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1]).
+-export([start_link/0]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -17,16 +17,21 @@
 %% API functions
 %% ===================================================================
 
-start_link(Args) ->
-    supervisor:start_link({local, ?MODULE}, ?MODULE, Args).
+start_link() ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %% ===================================================================
 %% Supervisor callbacks
 %% ===================================================================
 
-init(Args) ->
+init([]) ->
     {ok, { {one_for_one, 5, 10},
            [{bifrost,
-             {bifrost, start_link, [bifrost_memory_server, Args]},
-			 	permanent, 5000, worker, [bifrost]}]} }.
+             {bifrost, start_link, [bifrost_memory_server,
+                                    [{port, 2121}]]},
+             permanent,
+             5000,
+             worker,
+             [bifrost]}
+           ]} }.
 

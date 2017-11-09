@@ -7,17 +7,18 @@
 
 -module(bifrost_memory_server).
 -include("../include/bifrost.hrl").
+-include_lib("eunit/include/eunit.hrl").
 
 -behavior(gen_bifrost_server).
 
 % Bifrost callbacks
 -export([login/3,
          init/2,
-		 check_user/2,
+         check_user/2,
          current_directory/1,
          make_directory/2,
          change_directory/2,
-         list_files/2,
+         list_files/3,
          remove_directory/2,
          remove_file/2,
          put_file/4,
@@ -46,17 +47,16 @@
 
 % Initialize the state
 init(InitialState, _) ->
-	error_logger:info_msg("Init ~w...", [?MODULE]),
     InitialState.
 
 % All users w/o any requirements
 check_user(State, Username) ->
-	case Username of
-		"root" ->
-			{error, "root account is locked for ftp", State};
-		_Another ->
-			{ok, State}
-	end.
+  case Username of
+    "root" ->
+      {error, "root account is locked for ftp", State};
+    _Another ->
+      {ok, State}
+  end.
 
 % Authenticate the user. Return {false, State} to fail.
 login(State, _Username, _Password) ->
@@ -102,8 +102,8 @@ change_directory(State, Directory) ->
             {error, State}
     end.
 
-disconnect(State, _Reason) ->
-	{ok, State}.
+disconnect(_, Reason) ->
+    ok.
 
 % Delete a file
 remove_file(State, File) ->
@@ -153,9 +153,9 @@ remove_directory(State, Directory) ->
     end.
 
 % List files in the current or specified directory.
-list_files(State, "") ->
-    list_files(State, current_directory(State));
-list_files(State, Directory) ->
+list_files(State, Options, "") ->
+    list_files(State, Options, current_directory(State));
+list_files(State, _Options, Directory) ->
     Target = absolute_path(State, Directory),
     Fs = get_fs(get_module_state(State)),
     case fetch_path(Fs, Target) of
@@ -180,23 +180,18 @@ list_files(State, Directory) ->
 % Upload notification is arriving during it with FileRetrievalFun == notification
 % and _Status done or terminated
 put_file(State, _ProvidedFileName, notification, _Status) ->
-	{ok, State};
-
+ {ok, State};
 put_file(State, ProvidedFileName, _Mode, FileRetrievalFun) ->
     FileName = lists:last(string:tokens(ProvidedFileName, "/")),
     Target = absolute_path(State, FileName),
     ModState = get_module_state(State),
     Fs = get_fs(ModState),
-    case read_from_fun(FileRetrievalFun) of
-        {ok, FileBytes, FileSize} ->
-            NewFs= set_path(Fs, Target, {file,
+    {ok, FileBytes, FileSize} = read_from_fun(FileRetrievalFun),
+    NewFs= set_path(Fs, Target, {file,
                                  FileBytes,
                                  new_file_info(FileName, file, FileSize)}),
-            NewModState = ModState#msrv_state{fs=NewFs},
-            {ok, set_module_state(State, NewModState)};
-        {error, Reason} ->
-            {error, Reason, State}
-    end.
+    NewModState = ModState#msrv_state{fs=NewFs},
+    {ok, set_module_state(State, NewModState)}.
 
 % Returns {ok, fun(ByteCount)}, which is a function that reads ByteCount byes
 % and itself returns a continuation until {done, State} is returned.
@@ -231,17 +226,13 @@ site_help(_) ->
     {error, not_found}.
 
 % Memory Server-specific Functions
+
 read_from_fun(Fun) ->
     read_from_fun([], 0, Fun).
-
 read_from_fun(Buffer, Count, Fun) ->
     case Fun() of
-        {ok, _Bytes, ReadCount} when Count + ReadCount >= 1024*1024 ->
-            {error, {550, "No space left on device."} };
-
         {ok, Bytes, ReadCount} ->
             read_from_fun(Buffer ++ [Bytes], Count + ReadCount, Fun);
-
         done ->
             {ok, Buffer, Count}
     end.
@@ -383,7 +374,6 @@ set_path({dir, Root, FileInfo}, [Current | Rest], Val) ->
 
 % Tests
 -ifdef(TEST).
--include_lib("eunit/include/eunit.hrl").
 
 fs_with_paths([], State) ->
     State;
